@@ -134,3 +134,14 @@ The URL contains a session-specific JWT token. It expires when the notebook sess
 ## License
 
 MIT
+
+## Claude Code Integration
+
+kgz includes a `SKILL.md` for [Claude Code](https://claude.ai/claude-code). To enable it:
+
+```bash
+mkdir -p ~/.claude/skills/kgz-guide
+cp SKILL.md ~/.claude/skills/kgz-guide/skill.md
+```
+
+This gives Claude Code full knowledge of the kgz API so it can use Kaggle GPUs on your behalf.
