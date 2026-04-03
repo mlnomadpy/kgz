@@ -333,9 +333,16 @@ class Kernel:
     # Environment
     # ----------------------------------------------------------------
     def set_env(self, **env_vars):
-        """Set environment variables on the remote kernel (not visible in code history)."""
+        """
+        Set environment variables on the remote kernel.
+        Secrets are NOT saved to execution history or notebook export.
+        """
         code = "\n".join(f"import os; os.environ[{k!r}] = {v!r}" for k, v in env_vars.items())
-        return self.execute(code, stream=False)
+        result = self.execute(code, stream=False)
+        # Remove from history — secrets should never be exported
+        if self._history and self._history[-1].get("code", "").startswith("import os; os.environ"):
+            self._history.pop()
+        return result
 
     # ----------------------------------------------------------------
     # Snapshot / inspection
