@@ -1,6 +1,6 @@
-# kgz — Execute Code on Kaggle Jupyter Kernels
+# kgz — Execute Code on Kaggle Kernels (GPU & TPU)
 
-Use this knowledge when the user wants to run code on Kaggle, use Kaggle GPUs/TPUs remotely, or when you see `import kgz` or `from kgz import`.
+Use when user wants to run code on Kaggle, use Kaggle GPUs/TPUs, or sees `import kgz`.
 
 ## Install
 
@@ -8,168 +8,137 @@ Use this knowledge when the user wants to run code on Kaggle, use Kaggle GPUs/TP
 pip install kgz
 ```
 
-## Core API
+## Core
 
 ```python
-from kgz import Kernel, CellResult, KernelError
+from kgz import Kernel
+k = Kernel(url)
+k = Kernel(url, name="session")
 
-# Connect (user provides URL from their Kaggle notebook browser tab)
-k = Kernel("https://kkb-production.jupyter-proxy.kaggle.net/k/.../proxy")
+result = k.execute(code, stream=False)  # ALWAYS stream=False from agents
+result.success / result.stdout / result.return_value / result.error_name
 
-# Execute code — returns structured CellResult
-result = k.execute("print('hello')", stream=False)
-result.success        # bool
-result.stdout         # str — print() output
-result.return_value   # str | None — last expression (like Jupyter Out[])
-result.error_name     # str | None — exception class
-result.error_value    # str | None — exception message
-result.traceback      # list — traceback lines
-result.elapsed_seconds # float
-
-# Aliases
-result = k.run(code, stream=False)  # same as execute()
-
-# Control
-k.status()      # 'idle' or 'busy'
-k.interrupt()   # Ctrl-C
-k.wait()        # Block until idle
-k.restart()     # Restart kernel (clears state)
-k.is_alive()    # True if reachable
-k.close()       # Close persistent WebSocket
+k.status()        # 'idle' | 'busy'
+k.interrupt()     # Ctrl-C
+k.wait()          # Block until idle
+k.restart()       # Reset kernel
+k.close()         # Close WebSocket
 ```
 
-## IMPORTANT: Always use stream=False from code
-
-`stream=True` (default) prints to stdout. When calling from agent code, always pass `stream=False` and read `result.stdout` instead.
-
-## Error Handling
+## GPU & TPU Support
 
 ```python
-# Check success
-result = k.execute(code, stream=False)
-if not result.success:
-    print(f"Error: {result.error_name}: {result.error_value}")
-
-# Or raise exceptions
-try:
-    k.execute(code, stream=False, raise_on_error=True)
-except KernelError as e:
-    print(e.result.traceback)
+k.is_tpu()          # True if TPU kernel
+k.device_info()     # Full device details (GPU/TPU)
+k.tpu_type()        # "TPU v3-8" or "Tesla T4"
+k.resources()       # GPU util%, VRAM, CPU%, RAM
 ```
 
-## Multi-Cell Pipeline
+## Health Monitor
 
 ```python
-results = k.execute_notebook([
-    "import jax",
-    "model = build()",
-    "train(model)",
-], stop_on_error=True, stream=False)
-
-for i, r in enumerate(results):
-    print(f"Cell {i}: {'OK' if r.success else r.error_name}")
+k.health_check()        # Full dashboard: kernel, GPU/TPU, training metrics, quota
+k.training_progress()   # Parse step/loss/lr/tok_s from output
+k.monitor().check()     # Programmatic health status dict
 ```
 
-## Inspect Remote State
+## Quota (GPU: 30h/week, TPU: 20h/week)
 
 ```python
-# Variable snapshot
-snap = k.snapshot()
-# {"model": {"type": "GPT", "shape": "..."}, "loss": {"type": "float"}, ...}
-
-# GPU/TPU resources
-res = k.resources()
-# {"backend": "gpu", "device_count": 2, "gpus": [{"utilization": 85, "memory_used_mb": 12000}]}
+k.quota_summary()           # Remaining hours + session time
+k.start_quota_tracking()    # Start counting
+k.stop_quota_tracking()     # Log usage
+k.set_budget(max_hours=8, notify_url=slack)  # Alert + interrupt at limit
 ```
 
-## File Operations
+## Caching (98x speedup on repeated calls)
 
 ```python
-from kgz import upload_file, download_file
-from kgz.file_ops import list_files, upload_directory
+result = k.execute_cached(code)  # Second call: from local cache
+k.clear_cache()
+```
 
+## Pipeline
+
+```python
+results = k.pipeline([
+    ("Install", "pip install -q jax"),
+    ("Train", "train(steps=5000)"),
+], notify_url=slack, use_cache=True)
+```
+
+## Notebook Import/Export
+
+```python
+results = k.run_notebook("training.ipynb")
+k.to_notebook("output.ipynb")
+```
+
+## Files
+
+```python
+from kgz import upload_file, download_file, FileSync
 upload_file(url, "model.py", "model.py")
-upload_directory(url, "./src", "src")
-download_file(url, "/kaggle/working/results.json", "./results.json")
-files = list_files(url)
-```
-
-## File Sync (Watch Mode)
-
-```python
-from kgz import FileSync
-
+download_file(url, "/kaggle/working/model.pkl", "./")
+k.download_model("/kaggle/working/model.pkl")  # With size reporting
 sync = FileSync(url, "./src", "/kaggle/working/src")
-sync.push()      # One-shot upload changed files
-sync.start()     # Background watch thread
-sync.stop()
+sync.start()  # Background watch
 ```
 
-## Environment Variables (secrets)
+## Kaggle Datasets
 
 ```python
-k.set_env(HF_TOKEN="hf_...", WANDB_API_KEY="...")
-# Set without appearing in execution history
+k.attach_dataset("openai/gsm8k")   # Check if mounted
+k.list_datasets()                    # List all mounted datasets
 ```
 
-## Session Persistence
+## Secrets (excluded from history)
 
 ```python
-k.save_session()                    # Save to ~/.kgz/{name}.json
-k = Kernel.resume("session-name")   # Resume later
-Kernel.list_sessions()               # List all saved
+k.set_env(WANDB_API_KEY="...", HF_TOKEN="...")
 ```
 
-## Notebook Export
+## Environment
 
 ```python
-k.to_notebook("output.ipynb")  # Export execution history as .ipynb
+k.snapshot_env()     # pip freeze → local file
+k.restore_env()      # Restore packages
+```
+
+## Sessions & Profiles
+
+```python
+k.save_session()                 # Save for resume
+k = Kernel.resume("name")       # Resume later
+k.save_profile("gpu-training")  # Save config
+k = Kernel.from_profile("gpu-training")
+```
+
+## Parallel
+
+```python
+results = Kernel.parallel_execute([k1, k2], code)
+```
+
+## Notifications
+
+```python
+k.execute_notify(code, notify_url=slack, label="Training")
 ```
 
 ## CLI
 
 ```bash
-kgz run URL "code"
-kgz exec URL -f script.py
-kgz status URL
-kgz interrupt URL
-kgz wait URL
-kgz upload URL file.py
-kgz download URL remote.json ./local.json
-kgz ls URL
-kgz snapshot URL
-kgz resources URL
-kgz sync URL ./local_dir
-kgz sessions
+kgz run/exec/status/interrupt/wait/restart
+kgz upload/download/ls/sync
+kgz snapshot/resources/sessions/notebook
 ```
 
-## Common Patterns
+## Kaggle Limits
 
-### Install deps then train
-```python
-k.execute("import subprocess,sys; subprocess.check_call([sys.executable,'-m','pip','install','-q','jax','flax'])", stream=False)
-k.execute(open("train.py").read(), timeout=3600, stream=True)
-```
-
-### Check GPU before running
-```python
-res = k.resources()
-if res.get("device_count", 0) >= 2:
-    k.execute("train(batch_size=64)")  # multi-GPU
-else:
-    k.execute("train(batch_size=32)")  # single GPU
-```
-
-### Recover from OOM
-```python
-r = k.execute(code, stream=False)
-if not r.success and "out of memory" in str(r.error_value).lower():
-    k.execute("import gc; gc.collect()")
-    k.execute(code_with_smaller_batch, stream=False)
-```
+GPU: 30h/week, 12h/session. TPU: 20h/week, 9h/session.
 
 ## Source
 
-- Repo: `/Users/tahabsn/Documents/GitHub/kgz`
-- 1,477 lines, 37 offline tests + 14 live tests
-- Zero deps except `websocket-client`
+- 2,000+ lines, 54 offline + 14 live tests
+- Dep: websocket-client

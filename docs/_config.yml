@@ -1,0 +1,13 @@
+title: kgz
+description: Execute code on remote Kaggle Jupyter kernels
+url: "https://www.tahabouhsine.com"
+baseurl: "/kgz"
+markdown: kramdown
+
+plugins:
+  - jekyll-seo-tag
+
+header_pages:
+  - index.md
+  - guide.md
+  - AGENT_GUIDE.md

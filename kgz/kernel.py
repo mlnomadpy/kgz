@@ -482,8 +482,13 @@ print(json.dumps(info))
         sessions = []
         for f in os.listdir(session_dir):
             if f.endswith(".json"):
-                with open(os.path.join(session_dir, f)) as fh:
-                    sessions.append(json.load(fh))
+                try:
+                    with open(os.path.join(session_dir, f)) as fh:
+                        data = json.load(fh)
+                    if "name" in data and "url" in data:
+                        sessions.append(data)
+                except Exception:
+                    pass
         return sessions
 
     # ----------------------------------------------------------------
@@ -523,15 +528,353 @@ print(json.dumps(info))
         return path
 
     # ----------------------------------------------------------------
+    # Cached execution
+    # ----------------------------------------------------------------
+    def execute_cached(self, code, **kwargs):
+        """Execute with local caching. Identical code returns cached result."""
+        from kgz.cache import ResultCache
+        if not hasattr(self, '_cache'):
+            self._cache = ResultCache()
+        cached = self._cache.get(code)
+        if cached is not None:
+            return cached
+        result = self.execute(code, **kwargs)
+        if result.success:
+            self._cache.put(code, result)
+        return result
+
+    def clear_cache(self):
+        """Clear local result cache."""
+        from kgz.cache import ResultCache
+        ResultCache().clear()
+
+    # ----------------------------------------------------------------
+    # Quota tracking
+    # ----------------------------------------------------------------
+    def quota(self, device_type=None):
+        """Get quota tracker. Auto-detects GPU/TPU."""
+        from kgz.quota import QuotaTracker
+        if not hasattr(self, '_quota'):
+            self._quota = QuotaTracker()
+        if device_type is None:
+            r = self.execute("import jax; print(jax.default_backend())", stream=False)
+            device_type = "tpu" if "tpu" in r.stdout.strip().lower() else "gpu"
+        return self._quota, device_type
+
+    def quota_summary(self):
+        """Print quota summary."""
+        qt, dt = self.quota()
+        print(qt.summary(dt))
+        print(f"Session limit: {qt.session_time_left(dt):.1f}h remaining")
+        return qt.remaining(dt)
+
+    def start_quota_tracking(self, device_type=None):
+        """Start tracking quota for this session."""
+        qt, dt = self.quota(device_type)
+        qt.start_session(dt)
+        print(f"Tracking {dt.upper()} quota: {qt.summary(dt)}")
+
+    def stop_quota_tracking(self):
+        """Stop and log usage."""
+        qt, dt = self.quota()
+        hours = qt.end_session()
+        if hours:
+            print(f"Session: {hours:.2f}h used. {qt.summary(dt)}")
+
+    # ----------------------------------------------------------------
+    # Notebook import
+    # ----------------------------------------------------------------
+    def run_notebook(self, path, stream=True, stop_on_error=True):
+        """Load .ipynb and execute all code cells."""
+        with open(path) as f:
+            nb = json.load(f)
+        cells = []
+        for cell in nb.get("cells", []):
+            if cell.get("cell_type") == "code":
+                src = cell.get("source", "")
+                if isinstance(src, list):
+                    src = "".join(src)
+                if src.strip():
+                    cells.append(src)
+        print(f"Loaded {len(cells)} cells from {path}")
+        return self.execute_notebook(cells, stream=stream, stop_on_error=stop_on_error)
+
+    # ----------------------------------------------------------------
+    # Notifications
+    # ----------------------------------------------------------------
+    def execute_notify(self, code, notify_url=None, label="Execution", **kwargs):
+        """Execute and send Slack/webhook notification on completion."""
+        from kgz.notify import notify as _notify
+        result = self.execute(code, **kwargs)
+        if notify_url:
+            status = "completed" if result.success else f"FAILED: {result.error_name}"
+            _notify(notify_url, f"[kgz] {label} {status} ({result.elapsed_seconds:.1f}s)")
+        return result
+
+    # ----------------------------------------------------------------
+    # Pipeline (run-once)
+    # ----------------------------------------------------------------
+    def pipeline(self, steps, notify_url=None, use_cache=False):
+        """
+        Run a pipeline: list of (label, code) tuples.
+        Tracks quota, notifies, optionally caches.
+
+        Returns list of (label, CellResult).
+        """
+        from kgz.notify import notify as _notify
+        self.start_quota_tracking()
+        results = []
+        for i, (label, code) in enumerate(steps):
+            print(f"\n--- [{i+1}/{len(steps)}] {label} ---")
+            if use_cache:
+                r = self.execute_cached(code, stream=True)
+            else:
+                r = self.execute(code, stream=True)
+            results.append((label, r))
+            if not r.success:
+                _notify(notify_url, f"[kgz] Pipeline failed at '{label}': {r.error_name}")
+                break
+        self.stop_quota_tracking()
+        passed = sum(1 for _, r in results if r.success)
+        total_t = sum(r.elapsed_seconds for _, r in results)
+        _notify(notify_url, f"[kgz] Pipeline: {passed}/{len(results)} steps ({total_t:.0f}s)")
+        return results
+
+    # ----------------------------------------------------------------
+    # Model download with size reporting
+    # ----------------------------------------------------------------
+    def download_model(self, remote_path, local_path=None):
+        """Download model file with size info."""
+        from kgz.file_ops import download_file
+        r = self.execute(f"import os; print(os.path.getsize('{remote_path}'))", stream=False)
+        size = int(r.stdout.strip()) if r.success and r.stdout.strip().isdigit() else 0
+        if size > 0:
+            print(f"Downloading {remote_path} ({size/1024/1024:.1f} MB)...")
+        local = local_path or os.path.basename(remote_path)
+        download_file(self.base_url, remote_path, local)
+        print(f"Saved: {local}")
+        return local
+
+    # ----------------------------------------------------------------
+    # Environment snapshot / restore
+    # ----------------------------------------------------------------
+    def snapshot_env(self, path=None):
+        """Save remote pip freeze locally."""
+        r = self.execute("import subprocess; print(subprocess.check_output(['pip','freeze']).decode())",
+                         stream=False)
+        if not r.success:
+            return None
+        path = path or os.path.expanduser(f"~/.kgz/{self.name}-reqs.txt")
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as f:
+            f.write(r.stdout)
+        print(f"Snapshot: {path} ({len(r.stdout.splitlines())} packages)")
+        return path
+
+    def restore_env(self, path=None):
+        """Restore pip packages from snapshot."""
+        path = path or os.path.expanduser(f"~/.kgz/{self.name}-reqs.txt")
+        if not os.path.exists(path):
+            print(f"No snapshot: {path}")
+            return
+        from kgz.file_ops import upload_file
+        upload_file(self.base_url, path, "_kgz_reqs.txt")
+        self.execute("import subprocess,sys; subprocess.check_call("
+                     "[sys.executable,'-m','pip','install','-q','-r','_kgz_reqs.txt'])",
+                     stream=False, timeout=300)
+        print(f"Restored from {path}")
+
+    # ----------------------------------------------------------------
+    # Parallel execution across multiple kernels
+    # ----------------------------------------------------------------
+    @staticmethod
+    def parallel_execute(kernels, code, **kwargs):
+        """Execute same code on multiple kernels in parallel."""
+        import threading
+        results = [None] * len(kernels)
+        def _run(i, k):
+            results[i] = k.execute(code, stream=False, **kwargs)
+        threads = [threading.Thread(target=_run, args=(i, k)) for i, k in enumerate(kernels)]
+        for t in threads: t.start()
+        for t in threads: t.join()
+        return results
+
+    # ----------------------------------------------------------------
+    # Health monitor
+    # ----------------------------------------------------------------
+    def monitor(self):
+        """Get a KernelMonitor for health checks and progress parsing."""
+        from kgz.health import KernelMonitor
+        return KernelMonitor(self)
+
+    def health_check(self):
+        """Full health check with formatted dashboard."""
+        return self.monitor().check_pretty()
+
+    def training_progress(self):
+        """Parse training metrics from latest execution output."""
+        from kgz.health import parse_training_progress
+        if self._history:
+            output = self._history[-1].get("output", "")
+            for line in reversed(output.strip().split("\n")):
+                m = parse_training_progress(line)
+                if m: return m
+        return {}
+
+    # ----------------------------------------------------------------
+    # TPU-specific helpers
+    # ----------------------------------------------------------------
+    def is_tpu(self):
+        """Check if kernel has TPU accelerator."""
+        r = self.execute("import jax; print(jax.default_backend())", stream=False)
+        return "tpu" in r.stdout.strip().lower()
+
+    def device_info(self):
+        """Get detailed device info (works for both GPU and TPU)."""
+        r = self.execute("""
+import jax
+info = {"backend": jax.default_backend(), "device_count": jax.device_count(),
+        "devices": [{"id": d.id, "kind": d.device_kind, "platform": d.platform}
+                    for d in jax.devices()]}
+try:
+    info["process_count"] = jax.process_count()
+    info["local_device_count"] = jax.local_device_count()
+except: pass
+import json; print(json.dumps(info))
+""", stream=False)
+        try:
+            import json as _json
+            return _json.loads(r.stdout.strip())
+        except Exception:
+            return {"raw": r.stdout}
+
+    def tpu_type(self):
+        """Get TPU type (e.g. 'TPU v3-8', 'TPU v2-8') or GPU type."""
+        info = self.device_info()
+        devices = info.get("devices", [])
+        if devices:
+            return devices[0].get("kind", "unknown")
+        return info.get("backend", "unknown")
+
+    # ----------------------------------------------------------------
+    # Profiles
+    # ----------------------------------------------------------------
+    def save_profile(self, profile_name):
+        """Save kernel config as reusable profile."""
+        from kgz.profiles import save_profile
+        config = {"url": self.base_url, "name": self.name}
+        save_profile(profile_name, config)
+        print(f"Profile '{profile_name}' saved")
+
+    @classmethod
+    def from_profile(cls, profile_name):
+        """Create Kernel from saved profile."""
+        from kgz.profiles import load_profile
+        config = load_profile(profile_name)
+        if not config: raise FileNotFoundError(f"No profile: {profile_name}")
+        return cls(config["url"], name=config.get("name", profile_name))
+
+    # ----------------------------------------------------------------
+    # Audit
+    # ----------------------------------------------------------------
+    def _audit(self, action, details=None):
+        from kgz.audit import log_action
+        log_action(action, self.name, details)
+
+    # ----------------------------------------------------------------
+    # Budget (quota-based)
+    # ----------------------------------------------------------------
+    def set_budget(self, max_hours, notify_url=None):
+        """
+        Monitor quota and alert when approaching limit.
+
+        Args:
+            max_hours: Max hours to use this session
+            notify_url: Slack/webhook for alerts
+        """
+        from kgz.notify import notify as _notify
+        import time as _time
+        qt, dt = self.quota()
+        qt.start_session(dt)
+        alert_at = max_hours * 0.8
+        alerted = False
+        print(f"Budget: {max_hours}h (alert at {alert_at:.1f}h)")
+
+        while True:
+            used = qt.used_this_week(dt)
+            session_used = (_time.time() - qt._session_start) / 3600 if qt._session_start else 0
+            if session_used >= max_hours:
+                msg = f"[kgz] Budget exceeded: {session_used:.1f}h used (limit: {max_hours}h)"
+                print(msg)
+                _notify(notify_url, msg)
+                self.interrupt()
+                break
+            if session_used >= alert_at and not alerted:
+                msg = f"[kgz] Budget alert: {session_used:.1f}/{max_hours}h"
+                print(msg)
+                _notify(notify_url, msg)
+                alerted = True
+
+            if self.status() == "idle":
+                break
+            _time.sleep(60)
+
+        qt.end_session()
+
+    # ----------------------------------------------------------------
+    # Kaggle dataset helpers
+    # ----------------------------------------------------------------
+    def attach_dataset(self, dataset_slug):
+        """
+        Make a Kaggle dataset available in the kernel.
+        Kaggle datasets are pre-mounted at /kaggle/input/{dataset_name}.
+
+        Args:
+            dataset_slug: e.g. "openai/gsm8k" or "username/dataset-name"
+        """
+        name = dataset_slug.split("/")[-1]
+        r = self.execute(f"""
+import os
+path = f"/kaggle/input/{name}"
+if os.path.exists(path):
+    files = os.listdir(path)
+    print(f"Dataset mounted: {{path}} ({{len(files)}} files)")
+    for f in files[:10]:
+        size = os.path.getsize(os.path.join(path, f))
+        print(f"  {{f}}: {{size/1024/1024:.1f}} MB")
+else:
+    print(f"Dataset not found: {{path}}")
+    print("Available datasets:")
+    if os.path.exists("/kaggle/input"):
+        for d in os.listdir("/kaggle/input"):
+            print(f"  /kaggle/input/{{d}}")
+""".replace("{name}", name), stream=False)
+        return r
+
+    def list_datasets(self):
+        """List all mounted Kaggle datasets."""
+        r = self.execute("""
+import os
+if os.path.exists("/kaggle/input"):
+    for d in sorted(os.listdir("/kaggle/input")):
+        path = f"/kaggle/input/{d}"
+        files = os.listdir(path) if os.path.isdir(path) else []
+        print(f"  {d}: {len(files)} files")
+else:
+    print("No datasets mounted")
+""", stream=False)
+        print(r.stdout)
+        return r
+
+    # ----------------------------------------------------------------
     # Convenience
     # ----------------------------------------------------------------
-    def run(self, code: str, **kwargs) -> CellResult:
+    def run(self, code, **kwargs):
         """Alias for execute()."""
         return self.execute(code, **kwargs)
 
     @property
-    def history(self) -> list:
-        """Execution history."""
+    def history(self):
         return self._history.copy()
 
     def __repr__(self):

@@ -1,34 +1,21 @@
 """
-kgz — Execute code on remote Kaggle Jupyter kernels from anywhere.
-
-Usage:
-    from kgz import Kernel
-
-    k = Kernel("https://kkb-production.jupyter-proxy.kaggle.net/k/.../proxy")
-    result = k.execute("print('hello from Kaggle GPU')")
-    print(result.success)    # True
-    print(result.stdout)     # "hello from Kaggle GPU\n"
-
-    k.status()               # 'idle' or 'busy'
-    k.interrupt()            # Stop execution
-    k.snapshot()             # Inspect remote variables
-    k.resources()            # GPU/TPU usage
-    k.save_session()         # Save for later
-    k = Kernel.resume("name") # Resume later
-
-CLI:
-    kgz run URL "import jax; print(jax.devices())"
-    kgz status URL
-    kgz upload URL file.py
+kgz — Execute code on remote Kaggle Jupyter kernels (GPU & TPU).
 """
-
 from kgz.kernel import Kernel, CellResult, KernelError
 from kgz.file_ops import upload_file, download_file, list_files, upload_directory
 from kgz.sync import FileSync
+from kgz.cache import ResultCache
+from kgz.quota import QuotaTracker
+from kgz.health import KernelMonitor, parse_training_progress
+from kgz.profiles import save_profile, load_profile, list_profiles
+from kgz.audit import log_action, get_history
 
 __version__ = "0.1.0"
 __all__ = [
     "Kernel", "CellResult", "KernelError",
     "upload_file", "download_file", "list_files", "upload_directory",
-    "FileSync",
+    "FileSync", "ResultCache", "QuotaTracker",
+    "KernelMonitor", "parse_training_progress",
+    "save_profile", "load_profile", "list_profiles",
+    "log_action", "get_history",
 ]

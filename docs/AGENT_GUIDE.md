@@ -1,3 +1,9 @@
+---
+layout: page
+title: Agent Guide
+permalink: /agent-guide/
+---
+
 # kgz — Agent Integration Guide
 
 This document is designed for AI coding agents (Claude Code, Cursor, Copilot, etc.) to understand and use kgz effectively.

@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ page.title }} — kgz</title>
+    <meta name="description" content="{{ site.description }}">
+    <link rel="stylesheet" href="{{ '/assets/css/style.css' | relative_url }}">
+    {% seo %}
+</head>
+<body>
+    <header class="site-header">
+        <div class="container">
+            <a href="{{ '/' | relative_url }}" class="site-title">kgz</a>
+            <p class="site-tagline">{{ site.description }}</p>
+            <nav class="site-nav">
+                <a href="{{ '/guide/' | relative_url }}" {% if page.url == '/guide/' %}class="active"{% endif %}>Guide</a>
+                <a href="{{ '/agent-guide/' | relative_url }}" {% if page.url == '/agent-guide/' %}class="active"{% endif %}>Agent Guide</a>
+                <a href="https://github.com/mlnomadpy/kgz" class="github-link">GitHub</a>
+            </nav>
+        </div>
+    </header>
+    <main class="container">
+        {{ content }}
+    </main>
+    <footer class="site-footer">
+        <div class="container">
+            <p>kgz — Execute code on Kaggle GPUs from anywhere.</p>
+            <p><a href="https://github.com/mlnomadpy/kgz">GitHub</a> · <a href="https://pypi.org/project/kgz/">PyPI</a> · <a href="https://github.com/mlnomadpy/tpuz">tpuz</a></p>
+        </div>
+    </footer>
+</body>
+</html>
