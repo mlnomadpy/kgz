@@ -30,8 +30,8 @@ dev = [
 kgz = "kgz.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/tahabsn/kgz"
-Issues = "https://github.com/tahabsn/kgz/issues"
+Homepage = "https://github.com/mlnomadpy/kgz"
+Issues = "https://github.com/mlnomadpy/kgz/issues"
 
 [build-system]
 requires = ["hatchling"]
