@@ -3,9 +3,12 @@ name: Publish to PyPI
 on:
   release:
     types: [published]
+  push:
+    tags:
+      - "v*"
 
 permissions:
-  id-token: write  # Trusted publishing (no API token needed)
+  id-token: write
 
 jobs:
   build:
@@ -30,7 +33,7 @@ jobs:
           name: dist
           path: dist/
 
-  publish-pypi:
+  publish:
     needs: build
     runs-on: ubuntu-latest
     environment:
@@ -48,25 +51,3 @@ jobs:
 
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
-
-  publish-test-pypi:
-    needs: build
-    runs-on: ubuntu-latest
-    if: github.event.release.prerelease
-    environment:
-      name: testpypi
-      url: https://test.pypi.org/p/kgz
-    permissions:
-      id-token: write
-
-    steps:
-      - name: Download artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: dist
-          path: dist/
-
-      - name: Publish to Test PyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
-        with:
-          repository-url: https://test.pypi.org/legacy/
