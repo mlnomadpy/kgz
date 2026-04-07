@@ -10,7 +10,12 @@ from kgz.health import KernelMonitor, parse_training_progress
 from kgz.profiles import save_profile, load_profile, list_profiles
 from kgz.audit import log_action, get_history
 
-__version__ = "0.1.0"
+try:
+    from importlib.metadata import version
+    __version__ = version("kgz")
+except Exception:
+    __version__ = "0.0.0.dev"
+
 __all__ = [
     "Kernel", "CellResult", "KernelError",
     "upload_file", "download_file", "list_files", "upload_directory",

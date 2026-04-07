@@ -1,6 +1,6 @@
 [project]
 name = "kgz"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Execute code on remote Kaggle Jupyter kernels from your terminal"
 readme = "README.md"
 license = "MIT"
@@ -33,6 +33,9 @@ kgz = "kgz.cli:main"
 Homepage = "https://github.com/mlnomadpy/kgz"
 Issues = "https://github.com/mlnomadpy/kgz/issues"
 
+[tool.hatch.version]
+source = "vcs"
+
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling", "hatch-vcs"]
 build-backend = "hatchling.build"

@@ -6,8 +6,3 @@ markdown: kramdown
 
 plugins:
   - jekyll-seo-tag
-
-header_pages:
-  - index.md
-  - guide.md
-  - AGENT_GUIDE.md
